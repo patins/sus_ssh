@@ -1,6 +1,9 @@
+# Inspired by Paramiko server demo (https://github.com/paramiko/paramiko/blob/master/demos/demo_server.py)
+
 import socketserver
 import paramiko
 import threading
+import traceback
 
 class SusServer(paramiko.ServerInterface):
     def __init__(self):
@@ -29,39 +32,36 @@ class SusServer(paramiko.ServerInterface):
 def build_sus_tcp_handler(host_key):
     class SusTCPHandler(socketserver.BaseRequestHandler):
         def handle(self):
-            transport = paramiko.Transport(self.request)
-            transport.add_server_key(host_key)
-            server = SusServer()
             try:
+                transport = paramiko.Transport(self.request)
+                transport.add_server_key(host_key)
+                server = SusServer()
                 transport.start_server(server=server)
-            except paramiko.SSHException:
-                print("*** SSH negotiation failed.")
-                return
 
-            # transport.remote_version can be used to identify the client
+                channel = transport.accept(20)
+                if channel is None:
+                    raise Exception('No channel')
 
-            channel = transport.accept(20)
-            if channel is None:
-                print("*** No channel.")
-                return
+                server.event.wait(10)
+                if not server.event.is_set():
+                    raise Exception('No shell')
 
-            server.event.wait(10)
-            if not server.event.is_set():
-                print("*** Client never asked for a shell.")
-                return
+                channel.send(f"Enter passphrase for key '/Users/{server.sent_username}/.ssh/id_ed25519': ")
 
-            channel.send(f"Enter passphrase for key '/Users/{server.sent_username}/.ssh/id_ed25519': ")
+                f = channel.makefile("rU")
 
-            f = channel.makefile("rU")
+                passphrase = f.readline().strip("\r\n")
+                channel.send(f"\r\nI'm the server, and your passphrase is: {passphrase}\r\n")
+                channel.send("\r\nThis data isn't logged. Press any key to exit.\r\n")
 
-            passphrase = f.readline().strip("\r\n")
-            channel.send("\r\nI'm the server, and your passphrase is: " + passphrase + "\r\n")
-            channel.send("\r\nThis data isn't logged. Press any key to exit.\r\n")
+                f.read(size=1)
 
-            f.read(size=1)
+                channel.close()
+            except Exception as e:
+                traceback.print_exc()
+            finally:
+                transport.close()
 
-            channel.close()
-            transport.close()
 
     return SusTCPHandler
 
